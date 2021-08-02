@@ -1,17 +1,23 @@
 name = 'nfl_data_py'
 
+import datetime
+from pathlib import Path
+
 import pandas
 import numpy
-import datetime
 
 
-def import_pbp_data(years, columns=None, downcast=True):
+DATADIR = Path(__file__).parent.parent / 'data'
+
+
+def import_pbp_data(years, columns=None, downcast=True, cache=False):
     """Imports play-by-play data
     
     Args:
         years (List[int]): years to get PBP data for
         columns (List[str]): only return these columns
         downcast (bool): convert float64 to float32, default True
+        cache (bool): save downloaded dataframe to local disk, try to read cache if exists
 
     Returns:
         DataFrame
@@ -22,51 +28,58 @@ def import_pbp_data(years, columns=None, downcast=True):
         
     if min(years) < 1999:
         raise ValueError('Data not available before 1999.')
-    
-    if columns is None:
-        columns = []
-        
-    plays = pandas.DataFrame()
+
+    # try to read from cache if cache is True
+    fn = DATADIR / 'pbp_' + '_'.join(str[y] for y in years)
+    if cache:
+        try:
+            return pandas.read_parquet(fn)
+        except FileNotFoundError:
+            pass
+
+    # much faster to build dataframe from list
+    # rather than trying to grow dataframe incrementally
+    dfs = []
 
     url1 = r'https://github.com/nflverse/nflfastR-data/raw/master/data/play_by_play_'
     url2 = r'.parquet'
 
     for year in years:
-        
         try:
-            if len(columns) != 0:
+            if columns:
                 data = pandas.read_parquet(url1 + str(year) + url2, columns=columns, engine='fastparquet')
             else:
                 data = pandas.read_parquet(url1 + str(year) + url2, engine='fastparquet')
             
-            raw = pandas.DataFrame(data)
-            raw['season'] = year
-
-            if len(plays) == 0:
-                plays = raw
-            else:
-                plays = plays.append(raw)
-            
+            dfs.append(data.assign(season=year))           
             print(str(year) + ' done.')
             
         except:
             print('Data not available for ' + str(year))
     
+    # create one dataframe from list of smaller dataframes
+    plays = pandas.concat(dfs)
+
     # converts float64 to float32, saves ~30% memory
     if downcast:
         cols = plays.select_dtypes(include=[numpy.float64]).columns
         plays.loc[:, cols] = plays.loc[:, cols].astype(numpy.float32)
             
+    # caches result to data directory on local disk
+    if cache:
+        plays.to_parquet(fn)
+
     return plays
 
 
-def import_weekly_data(years, columns=None, downcast=True):
+def import_weekly_data(years, columns=None, downcast=True, cache=False):
     """Imports weekly player data
     
     Args:
         years (List[int]): years to get PBP data for
         columns (List[str]): only return these columns
         downcast (bool): convert float64 to float32, default True
+        cache (bool): save downloaded dataframe to local disk, try to read cache if exists
 
     Returns:
         DataFrame
@@ -78,19 +91,26 @@ def import_weekly_data(years, columns=None, downcast=True):
     if min(years) < 1999:
         raise ValueError('Data not available before 1999.')
     
-    if columns is None:
-        columns = []
-        
-    data = pandas.read_parquet(r'https://github.com/nflverse/nflfastR-data/raw/master/data/player_stats.parquet', engine='fastparquet')
-    data = data[data['season'].isin(years)]
+    # try to read from cache if cache is True
+    fn = DATADIR / 'weekly_' + '_'.join(str[y] for y in years)
+    if cache:
+        try:
+            return pandas.read_parquet(fn)
+        except FileNotFoundError:
+            pass
 
-    if len(columns) > 0:
-        data = data[columns]
+    url = 'https://github.com/nflverse/nflfastR-data/raw/master/data/player_stats.parquet'
+    data = pandas.read_parquet(url, columns=columns, engine='fastparquet')
+    data = data.loc[data['season'].isin(years), :]
 
     # converts float64 to float32, saves ~30% memory
     if downcast:
         cols = data.select_dtypes(include=[numpy.float64]).columns
         data.loc[:, cols] = data.loc[:, cols].astype(numpy.float32)
+
+    # caches result to data directory on local disk
+    if cache:
+        data.to_parquet(fn)
 
     return data
 
